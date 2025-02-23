@@ -1,70 +1,46 @@
-from __future__ import annotations
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    WorkerOptions,
-    cli,
-    llm
-)
-from livekit.agents.multimodal import MultimodalAgent
-from livekit.plugins import openai
-from dotenv import load_dotenv
-from api import AssistantFnc
-from prompts import WELCOME_MESSAGE, INSTRUCTIONS, LOOKUP_VIN_MESSAGE
 import os
+from livekit import api
+from flask import Flask, request
+from dotenv import load_dotenv
+from flask_cors import CORS
+from livekit.api import LiveKitAPI, ListRoomsRequest
+import uuid
 
 load_dotenv()
 
-async def entrypoint(ctx: JobContext):
-    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-    await ctx.wait_for_participant()
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+async def generate_room_name():
+    name = "room-" + str(uuid.uuid4())[:8]
+    rooms = await get_rooms()
+    while name in rooms:
+        name = "room-" + str(uuid.uuid4())[:8]
+    return name
+
+async def get_rooms():
+    api = LiveKitAPI()
+    rooms = await api.room.list_rooms(ListRoomsRequest())
+    await api.aclose()
+    return [room.name for room in rooms.rooms]
+
+@app.route("/getToken")
+async def get_token():
+    name = request.args.get("name", "my name")
+    room = request.args.get("room", None)
     
-    model = openai.realtime.RealtimeModel(
-        instructions=INSTRUCTIONS,
-        voice="shimmer",
-        temperature=0.8,
-        modalities=["audio", "text"]
-    )
-    assistant_fnc = AssistantFnc()
-    assistant = MultimodalAgent(model=model, fnc_ctx=assistant_fnc)
-    assistant.start(ctx.room)
-    
-    session = model.sessions[0]
-    session.conversation.item.create(
-        llm.ChatMessage(
-            role="assistant",
-            content=WELCOME_MESSAGE
-        )
-    )
-    session.response.create()
-    
-    @session.on("user_speech_committed")
-    def on_user_speech_committed(msg: llm.ChatMessage):
-        if isinstance(msg.content, list):
-            msg.content = "\n".join("[image]" if isinstance(x, llm.ChatImage) else x for x in msg)
-            
-        if assistant_fnc.has_car():
-            handle_query(msg)
-        else:
-            find_profile(msg)
+    if not room:
+        room = await generate_room_name()
         
-    def find_profile(msg: llm.ChatMessage):
-        session.conversation.item.create(
-            llm.ChatMessage(
-                role="system",
-                content=LOOKUP_VIN_MESSAGE(msg)
-            )
-        )
-        session.response.create()
-        
-    def handle_query(msg: llm.ChatMessage):
-        session.conversation.item.create(
-            llm.ChatMessage(
-                role="user",
-                content=msg.content
-            )
-        )
-        session.response.create()
+    token = api.AccessToken(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")) \
+        .with_identity(name)\
+        .with_name(name)\
+        .with_grants(api.VideoGrants(
+            room_join=True,
+            room=room
+        ))
     
+    return token.to_jwt()
+
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    app.run(host="0.0.0.0", port=5001, debug=True)
