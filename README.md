@@ -36,6 +36,8 @@ This project is a Python-based backend for a LiveKit-powered voice AI interview 
      LIVEKIT_API_SECRET=your_livekit_api_secret
      LIVEKIT_URL=wss://your-livekit-server/agent
      OPENAI_API_KEY=your_key
+     DEEPGRAM_API_KEY = your_key
+     CARTESIA_API_KEY= your_key
      ```
 
 2. **Running Locally:**  
